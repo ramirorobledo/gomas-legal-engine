@@ -1,0 +1,9 @@
+# OCR Result for test_indexing.pdf
+
+## Page 1
+
+AMPARO DIRECTO EN REVISIÓN
+TRIBUNAL COLEGIADO DE CIRCUITO
+QUEJOSO: Maria Lopez
+CONSIDERANDO PRIMERO. Competencia.
+CONSIDERANDO SEGUNDO. Oportunidad.

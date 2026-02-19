@@ -1,0 +1,10 @@
+{
+    "mcpServers": {
+        "gomas-legal": {
+            "command": "C:\\Users\\DELL\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+            "args": [
+                "C:\\Users\\DELL\\.gemini\\antigravity\\scratch\\gomas_legal_engine\\mcp_server.py"
+            ]
+        }
+    }
+}

@@ -1,0 +1,62 @@
+# Reglas de clasificación para Gomas Legal Engine
+# Formato:
+# - tipo: nombre_del_tipo
+#   señales_fuertes: lista de patrones (texto o regex) con ubicación y peso
+#   umbral_confianza_alta: valor (0.0 - 1.0) para aceptar automático
+#   etiquetas: lista de etiquetas
+
+- tipo: amparo_directo
+  señales_fuertes:
+    - texto: "AMPARO DIRECTO"
+      ubicacion: primeras_5_paginas
+      peso: 0.6
+    - texto: "TRIBUNAL COLEGIADO"
+      ubicacion: encabezado
+      peso: 0.3
+    - texto: "QUEJOSO"
+      ubicacion: primeras_5_paginas
+      peso: 0.2
+  umbral_confianza_alta: 0.7
+  etiquetas: [amparo, federal, sentencia]
+
+- tipo: amparo_indirecto
+  señales_fuertes:
+    - texto: "AMPARO INDIRECTO"
+      ubicacion: primeras_5_paginas
+      peso: 0.6
+    - texto: "JUZGADO DE DISTRITO"
+      ubicacion: encabezado
+      peso: 0.3
+    - texto: "AUDIENCIA CONSTITUCIONAL"
+      ubicacion: cuerpo
+      peso: 0.3
+  umbral_confianza_alta: 0.7
+  etiquetas: [amparo, federal, juzgado]
+
+- tipo: sentencia_penal
+  señales_fuertes:
+    - texto: "SENTENCIA DEFINITIVA"
+      ubicacion: primeras_5_paginas
+      peso: 0.5
+    - texto: "CAUSA PENAL"
+      ubicacion: encabezado
+      peso: 0.4
+    - texto: "CÓDIGO NACIONAL DE PROCEDIMIENTOS PENALES"
+      ubicacion: cuerpo
+      peso: 0.2
+  umbral_confianza_alta: 0.7
+  etiquetas: [penal, sentencia, estatal]
+
+- tipo: acuerdo_tramite
+  señales_fuertes:
+    - texto: "ACUERDO"
+      ubicacion: primeras_2_paginas
+      peso: 0.4
+    - texto: "NOTIFÍQUESE"
+      ubicacion: ultimas_2_paginas
+      peso: 0.4
+    - texto: "VISTO"
+      ubicacion: inicio
+      peso: 0.3
+  umbral_confianza_alta: 0.6
+  etiquetas: [tramite, acuerdo]
