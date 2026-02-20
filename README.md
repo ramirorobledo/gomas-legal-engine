@@ -27,6 +27,7 @@ The system follows a linear processing pipeline:
 ### Prerequisites
 
 - Python 3.10+
+- [Node.js](https://nodejs.org/) (v18+)
 - [Git](https://git-scm.com/)
 - API Keys for LLM services (Anthropic/OpenAI)
 
@@ -43,7 +44,14 @@ The system follows a linear processing pipeline:
     pip install -r requirements.txt
     ```
 
-3.  **Configure Environment**
+3.  **Install Frontend Dependencies**
+    ```bash
+    cd frontend
+    npm install
+    cd ..
+    ```
+
+4.  **Configure Environment**
     Create a `.env` file in the root directory:
     ```env
     # Required for Reasoning (Page Index, Cleaning)
@@ -63,6 +71,12 @@ The system follows a linear processing pipeline:
     python main.py
     ```
     The system will start monitoring the `input/` folder.
+
+    **Alternatively (Recommended)**:
+    To start **both** the Watchdog and the API server at once, run:
+    ```powershell
+    ./start_all.ps1
+    ```
 
 2.  **Process Documents**
     Simply drop a PDF file into the `input/` folder. The engine will automatically pick it up and process it through the pipeline.
