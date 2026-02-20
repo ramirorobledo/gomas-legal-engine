@@ -42,3 +42,8 @@ review_queue/
 # OS
 .DS_Store
 Thumbs.db
+
+# Processing Artifacts
+normalized/
+processing/
+error.log

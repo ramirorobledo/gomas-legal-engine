@@ -7,10 +7,17 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import search_engine
+import database
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GomasAPI")
+
+# Initialize DB
+try:
+    database.init_db()
+except Exception as e:
+    logger.error(f"Failed to initialize database: {e}")
 
 app = FastAPI(title="Gomas Legal Engine API", version="0.1.0")
 
@@ -26,13 +33,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    
 )
 
 # Initialize Engine
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INDICES_DIR = os.path.join(BASE_DIR, "indices")
 INPUT_DIR = os.path.join(BASE_DIR, "input")
-DB_PATH = os.path.join(BASE_DIR, "db", "gomas_legal.db")
 
 # Ensure Input Dir
 os.makedirs(INPUT_DIR, exist_ok=True)
@@ -46,11 +53,6 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: List[str]
-
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 @app.get("/health")
 def health_check():
@@ -66,7 +68,7 @@ def list_documents():
     # Actually, better to query DB directly for status of ALL docs including processing ones.
     
     try:
-        conn = get_db_connection()
+        conn = database.get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT id, nombre_archivo, estado, tipo_documento, confianza, fecha_recibido FROM documentos ORDER BY id DESC")
         rows = cursor.fetchall()

@@ -11,7 +11,24 @@ def test_health():
     assert response.json() == {"status": "ok"}
     print("Health check passed.")
 
+import database
+from datetime import datetime
+
 def test_list_documents():
+    # Seed DB if empty
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT count(*) FROM documentos")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        print("Seeding DB for test...")
+        database.register_document("test_seed.pdf", "c:/tmp/test_seed.pdf", "fakehash123")
+        # Update status to simulate processed
+        doc_id = 1 # unlikely to be different if empty
+        conn.execute("UPDATE documentos SET estado = 'indexado', tipo_documento = 'Test', confianza = 0.9 WHERE id = ?", (doc_id,))
+        conn.commit()
+    conn.close()
+
     response = client.get("/documents")
     assert response.status_code == 200
     docs = response.json()

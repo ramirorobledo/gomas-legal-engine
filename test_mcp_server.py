@@ -6,6 +6,9 @@ from mcp.server.fastmcp import FastMCP
 # Add current dir to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import pytest
+
+@pytest.mark.asyncio
 async def test_mcp_logic():
     print("Testing MCP Server Logic...")
     

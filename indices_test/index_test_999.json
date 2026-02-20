@@ -1,0 +1,25 @@
+{
+  "doc_name": "test_doc",
+  "structure": [
+    {
+      "title": "Título Legal",
+      "node_id": "0000",
+      "prefix_summary": "# Título Legal",
+      "line_num": 1,
+      "nodes": [
+        {
+          "title": "Sección 1",
+          "node_id": "0001",
+          "summary": "## Sección 1\nContenido de prueba para el índice.",
+          "line_num": 3
+        },
+        {
+          "title": "Sección 2",
+          "node_id": "0002",
+          "summary": "## Sección 2\nMás contenido legal relevante.",
+          "line_num": 6
+        }
+      ]
+    }
+  ]
+}
