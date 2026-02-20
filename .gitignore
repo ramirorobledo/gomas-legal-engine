@@ -47,3 +47,6 @@ Thumbs.db
 normalized/
 processing/
 error.log
+
+# Claude
+.claude/

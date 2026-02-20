@@ -1,210 +1,248 @@
+"""
+Gomas Legal Engine — Pipeline Watcher
+Monitors the input directory for new PDFs and processes them through:
+  1. File stabilization + magic bytes validation
+  2. SHA-256 deduplication
+  3. OCR  (Mistral API or PyMuPDF fallback)
+  4. Normalization
+  5. Classification + entity extraction
+  6. PageIndex indexing
+  7. FTS5 index update
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import shutil
 import sys
 import time
-import logging
-import os
-from watchdog.observers import Observer
+
+from loguru import logger
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+import config
 import database
 import utils
-import ocr_service
-import normalizer
-import classifier
-from dotenv import load_dotenv
 
-# Setup Logging
-log_dir = os.path.join(os.path.dirname(__file__), "logs")
-os.makedirs(log_dir, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(__file__), "logs", "gomas_engine.log")),
-        logging.StreamHandler()
-    ]
+# ─── Loguru setup ─────────────────────────────────────────────────────────────
+logger.remove()  # Remove default handler
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
 )
-logger = logging.getLogger("GomasEngine")
+logger.add(
+    os.path.join(config.LOG_DIR, "gomas_engine.log"),
+    rotation="10 MB",
+    retention="30 days",
+    level="DEBUG",
+    encoding="utf-8",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{line} | {message}",
+)
 
-# Load Env
-load_dotenv()
 
-# Directories
-BASE_DIR = os.path.dirname(__file__)
-INPUT_DIR = os.path.join(BASE_DIR, "input")
-PROCESSING_DIR = os.path.join(BASE_DIR, "processing")
-OCR_OUTPUT_DIR = os.path.join(BASE_DIR, "ocr_output")
-NORMALIZED_DIR = os.path.join(BASE_DIR, "normalized")
-REVIEW_QUEUE_DIR = os.path.join(BASE_DIR, "review_queue")
+# ─── Magic bytes validation ───────────────────────────────────────────────────
+
+def is_valid_pdf(filepath: str) -> bool:
+    """Verifies the file starts with the PDF magic bytes %PDF."""
+    try:
+        with open(filepath, "rb") as f:
+            header = f.read(4)
+        return header == b"%PDF"
+    except OSError:
+        return False
+
+
+# ─── Pipeline ─────────────────────────────────────────────────────────────────
+
+async def _run_pipeline(filepath: str):
+    """
+    Full async pipeline for one PDF.
+    Raises on unrecoverable error so the caller can handle dead-letter logic.
+    """
+    import ocr_service
+    import normalizer
+    import classifier
+    import indexer
+
+    filename = os.path.basename(filepath)
+
+    # 1. Stabilization
+    if not utils.wait_for_file_stabilization(filepath):
+        raise RuntimeError(f"File {filename} did not stabilize.")
+
+    # 2. Magic bytes
+    if not is_valid_pdf(filepath):
+        raise ValueError(f"File {filename} is not a valid PDF (bad magic bytes).")
+
+    # 3. Deduplication
+    file_hash   = utils.calculate_file_hash(filepath)
+    existing    = database.get_document_by_hash(file_hash)
+
+    if existing and existing.get("estado") == "indexado":
+        logger.info(f"Duplicate (already indexed): {filename} — skipping.")
+        return
+
+    if existing:
+        doc_id = existing["id"]
+        logger.info(f"Re-processing incomplete document ID {doc_id}: {filename}")
+    else:
+        doc_id = database.register_document(filename, filepath, file_hash)
+        logger.info(f"Registered new document ID {doc_id}: {filename}")
+
+    job_id = database.enqueue_job(doc_id)
+
+    # 4. Move to processing staging
+    proc_path = os.path.join(config.PROCESSING_DIR, filename)
+    utils.safe_move(filepath, proc_path)
+
+    # 5. OCR
+    logger.info(f"[{doc_id}] Starting OCR…")
+    md_path, json_path, pages = ocr_service.process_pdf_ocr(
+        proc_path, config.OCR_OUTPUT_DIR, str(doc_id)
+    )
+    database.update_ocr_data(doc_id, md_path, json_path, pages)
+    logger.info(f"[{doc_id}] OCR done — {pages} pages.")
+
+    # 6. Normalization
+    logger.info(f"[{doc_id}] Normalizing…")
+    if not md_path or not os.path.exists(md_path):
+        raise FileNotFoundError(f"OCR Markdown missing: {md_path}")
+
+    with open(md_path, "r", encoding="utf-8") as f:
+        raw_text = f.read()
+
+    clean_text = normalizer.clean_markdown(raw_text)
+
+    norm_filename = f"norm_{os.path.basename(md_path)}"
+    norm_path     = os.path.join(config.NORMALIZED_DIR, norm_filename)
+    with open(norm_path, "w", encoding="utf-8") as f:
+        f.write(clean_text)
+
+    database.update_norm_path(doc_id, norm_path)
+
+    # 7. Classification + entity extraction
+    logger.info(f"[{doc_id}] Classifying…")
+    result = classifier.classify_document(clean_text)
+    database.update_document_classification(
+        doc_id,
+        result["tipo"],
+        result["confianza"],
+        result["etiquetas"],
+        result["requiere_revision"],
+        result.get("entidades", {}),
+    )
+    logger.info(
+        f"[{doc_id}] Classified as '{result['tipo']}' "
+        f"(conf={result['confianza']:.2f}, review={result['requiere_revision']})"
+    )
+
+    if result["requiere_revision"] and not config.FORCE_INDEXING:
+        logger.warning(f"[{doc_id}] Sent to review queue (low confidence).")
+        shutil.copy(proc_path, os.path.join(config.REVIEW_QUEUE_DIR, filename))
+        database.mark_job_done(job_id)
+        return
+
+    # 8. Indexing
+    logger.info(f"[{doc_id}] Indexing with PageIndex…")
+    os.makedirs(config.INDICES_DIR, exist_ok=True)
+    index_path = indexer.create_index(norm_path, str(doc_id), config.INDICES_DIR)
+    database.update_indexed(doc_id)
+    logger.success(f"[{doc_id}] Indexed → {index_path}")
+
+    database.mark_job_done(job_id)
+
+
+def process_document_sync(filepath: str):
+    """
+    Synchronous wrapper around the async pipeline with retry + dead-letter queue.
+    """
+    filename = os.path.basename(filepath)
+
+    for attempt in range(config.MAX_RETRIES):
+        try:
+            asyncio.run(_run_pipeline(filepath))
+            return  # success
+        except Exception as exc:
+            wait = 2 ** attempt
+            logger.warning(
+                f"Pipeline error for {filename} (attempt {attempt + 1}/{config.MAX_RETRIES}): {exc}"
+            )
+            if attempt < config.MAX_RETRIES - 1:
+                time.sleep(wait)
+            else:
+                # All retries exhausted → dead letter
+                logger.error(f"Moving {filename} to dead-letter queue after {config.MAX_RETRIES} failures.")
+                dead_path = os.path.join(config.DEAD_LETTER_DIR, filename)
+                try:
+                    if os.path.exists(filepath):
+                        shutil.move(filepath, dead_path)
+                    elif os.path.exists(os.path.join(config.PROCESSING_DIR, filename)):
+                        shutil.move(os.path.join(config.PROCESSING_DIR, filename), dead_path)
+                except Exception as move_exc:
+                    logger.error(f"Failed to move to dead letter: {move_exc}")
+
+                # Try to find doc_id and record error
+                try:
+                    file_hash = utils.calculate_file_hash(
+                        dead_path if os.path.exists(dead_path) else filepath
+                    )
+                    doc = database.get_document_by_hash(file_hash)
+                    if doc:
+                        database.add_to_dead_letter(doc["id"], str(exc))
+                except Exception:
+                    pass
+
+
+# ─── Watchdog Handler ─────────────────────────────────────────────────────────
 
 class LegalDocumentHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
         if not event.src_path.lower().endswith(".pdf"):
-            logger.info(f"Ignoring non-PDF file: {event.src_path}")
             return
-            
         logger.info(f"New PDF detected: {event.src_path}")
-        self.process_document(event.src_path)
+        process_document_sync(event.src_path)
 
-    def process_document(self, filepath):
-        filename = os.path.basename(filepath)
-        
-        # 1. Stabilization
-        if not utils.wait_for_file_stabilization(filepath):
-            logger.warning(f"File {filename} not stable or disappeared. Skipping.")
-            return
 
-        # 2. Hashing & Deduplication
-        file_hash = utils.calculate_file_hash(filepath)
-        existing_doc = database.get_document_by_hash(file_hash)
-        
-        doc_id = -1
-        current_state = ""
-        
-        if existing_doc:
-            logger.info(f"Document {filename} already exists (ID: {existing_doc['id']}). Skipping OCR.")
-            doc_id = existing_doc['id']
-            # If it was previously errored or incomplete, we might want to resume?
-            # For now, we assume if it exists in DB, OCR was at least attempted or completed.
-            # We can move it to processed to clear the input folder if it's a re-drop.
-        else:
-            doc_id = database.register_document(filename, filepath, file_hash)
-            logger.info(f"Registered new document ID: {doc_id}")
-
-        # 3. Move to Processing (Staging)
-        processing_path = os.path.join(PROCESSING_DIR, filename)
-        utils.safe_move(filepath, processing_path)
-        
-        try:
-            # 4. OCR
-            if current_state in ['ocr_ok', 'normalizado', 'clasificado', 'indexado']:
-                logger.info(f"Document {doc_id} already has valid OCR. Skipping.")
-                if existing_doc:
-                    md_path = existing_doc['ocr_path']
-            else:
-                logger.info(f"Starting OCR for doc ID: {doc_id}")
-                md_path, json_path, pages = ocr_service.process_pdf_ocr(processing_path, OCR_OUTPUT_DIR, str(doc_id))
-                database.update_ocr_data(doc_id, md_path, json_path, pages)
-                logger.info(f"OCR completed for doc ID: {doc_id}")
-
-            # 5. Normalization
-            logger.info(f"Starting Normalization for doc ID: {doc_id}")
-            
-            if not md_path or not os.path.exists(md_path):
-                 raise FileNotFoundError(f"OCR Markdown file not found: {md_path}")
-                 
-            with open(md_path, 'r', encoding='utf-8') as f:
-                raw_text = f.read()
-            
-            try:
-                clean_text = normalizer.clean_markdown(raw_text)
-            except Exception as e:
-                logger.error(f"Normalizer crashed: {e}")
-                raise e
-            
-            norm_filename = f"norm_{os.path.basename(md_path)}"
-            norm_path = os.path.join(NORMALIZED_DIR, norm_filename)
-            
-            with open(norm_path, 'w', encoding='utf-8') as f:
-                f.write(clean_text)
-                
-            database.update_document_status(doc_id, "normalizado")
-            
-            # 6. Classification
-            logger.info(f"Starting Classification for doc ID: {doc_id}")
-            class_result = classifier.classify_document(clean_text)
-            
-            database.update_document_classification(
-                doc_id, 
-                class_result['tipo'], 
-                class_result['confianza'], 
-                class_result['etiquetas'], 
-                class_result['requiere_revision']
-            )
-            
-            logger.info(f"Classified doc {doc_id} as {class_result['tipo']} (Conf: {class_result['confianza']})")
-            
-            if class_result['requiere_revision']:
-                logger.warning(f"Document {doc_id} requires manual review.")
-                # Optionally copy to review queue folder?
-                # shutil.copy(processing_path, os.path.join(REVIEW_QUEUE_DIR, filename))
-            
-            # 7. Indexing
-            logger.info(f"Starting Indexing for doc ID: {doc_id}")
-            
-            # FORCE INDEXING for now (Phase 3 Review UI not ready)
-            # if not class_result['requiere_revision']:
-            if True: 
-                import indexer
-                indices_dir = os.path.join(BASE_DIR, "indices")
-                os.makedirs(indices_dir, exist_ok=True)
-                
-                index_path = indexer.create_index(norm_path, str(doc_id), indices_dir)
-                database.update_document_status(doc_id, "indexado")
-                # We should save index path to DB too? Schema has `fecha_indexado`.
-                # Let's add `fecha_indexado` update.
-                conn = database.get_db_connection()
-                conn.execute("UPDATE documentos SET fecha_indexado = datetime('now') WHERE id = ?", (doc_id,))
-                conn.commit()
-                conn.close()
-                logger.info(f"Indexing completed. Saved to {index_path}")
-            
-            if class_result['requiere_revision']:
-                 logger.warning(f"Document {doc_id} flagged for review (but indexed for testing).")
-            
-        except Exception as e:
-            logger.error(f"Error processing {filename}: {e}", exc_info=True)
-            database.update_document_status(doc_id, "error", str(e))
+# ─── Entrypoint ───────────────────────────────────────────────────────────────
 
 def main():
-    print("DEBUG: Starting main...")
-    # Init
-    try:
-        database.init_db()
-        print("DEBUG: Database initialized.")
-    except Exception as e:
-        print(f"DEBUG: Database init failed: {e}")
-        return
-    
-    # Ensure directories
-    for d in [INPUT_DIR, PROCESSING_DIR, OCR_OUTPUT_DIR]:
-        os.makedirs(d, exist_ok=True)
-    print("DEBUG: Directories ensured.")
+    logger.info("Gomas Legal Engine starting…")
 
-    logging.info(f"Gomas Legal Engine Watcher started.")
-    print("DEBUG: Logger initialized.")
-    
-    event_handler = LegalDocumentHandler()
-    
-    # Process existing files in INPUT_DIR
-    print("DEBUG: Scanning for existing files in input/...")
-    for filename in os.listdir(INPUT_DIR):
-        if filename.lower().endswith(".pdf"):
-            filepath = os.path.join(INPUT_DIR, filename)
-            print(f"DEBUG: Found existing file: {filename}")
+    database.init_db()
+    logger.info("Database initialized.")
+
+    # Process any PDFs already sitting in input/
+    existing = [
+        f for f in os.listdir(config.INPUT_DIR) if f.lower().endswith(".pdf")
+    ]
+    if existing:
+        logger.info(f"Processing {len(existing)} pre-existing file(s) in input/…")
+        for fname in existing:
+            fpath = os.path.join(config.INPUT_DIR, fname)
             try:
-                event_handler.process_document(filepath)
-            except Exception as e:
-                logger.error(f"Error processing existing file {filename}: {e}")
+                process_document_sync(fpath)
+            except Exception as exc:
+                logger.error(f"Error processing existing file {fname}: {exc}")
 
+    handler  = LegalDocumentHandler()
     observer = Observer()
-    observer.schedule(event_handler, INPUT_DIR, recursive=False)
-    try:
-        observer.start()
-        print("DEBUG: Observer started.")
-    except Exception as e:
-        print(f"DEBUG: Observer start failed: {e}")
-        return
-    
+    observer.schedule(handler, config.INPUT_DIR, recursive=False)
+    observer.start()
+    logger.info(f"Watching {config.INPUT_DIR} for new PDFs…")
+
     try:
         while True:
             time.sleep(1)
-            # print("DEBUG: Watcher alive...") # excessive noise, maybe just on start is enough. 
-            # actually better to not spam. I'll rely on the start message.
     except KeyboardInterrupt:
+        logger.info("Stopping watcher…")
         observer.stop()
     observer.join()
+    logger.info("Watcher stopped.")
+
 
 if __name__ == "__main__":
     main()

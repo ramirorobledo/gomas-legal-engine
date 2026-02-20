@@ -1,115 +1,146 @@
-import yaml
-import re
+"""
+Rule-based document classifier with:
+- Hot-reload: re-reads rules.yaml if the file has changed since last load
+- Entity extraction integrated (via entity_extractor module)
+- Returns type, confidence, tags, entities, requires_review
+"""
+from __future__ import annotations
+
 import os
-import logging
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Tuple
 
-# Load rules
-RULES_PATH = os.path.join(os.path.dirname(__file__), "rules.yaml")
+import yaml
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+import config
+import entity_extractor as ee
+
+RULES_PATH = config.RULES_PATH
+
 
 class DocumentClassifier:
+    """
+    Classifies legal documents by scoring text against YAML-defined rules.
+    Supports hot-reload: rules are reloaded automatically when rules.yaml changes.
+    """
+
     def __init__(self):
-        self.rules = self._load_rules()
+        self._rules: List[Dict] = []
+        self._rules_mtime: float = 0.0
+        self._load_rules()
 
-    def _load_rules(self) -> List[Dict]:
+    # ─── Rules loading (hot-reload) ───────────────────────────────────────────
+
+    def _load_rules(self):
         if not os.path.exists(RULES_PATH):
-            logger.warning("Rules file not found. Classification will fail.")
-            return []
-        with open(RULES_PATH, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or []
+            logger.warning(f"Rules file not found: {RULES_PATH}")
+            self._rules = []
+            return
+        try:
+            mtime = os.path.getmtime(RULES_PATH)
+            with open(RULES_PATH, "r", encoding="utf-8") as f:
+                self._rules = yaml.safe_load(f) or []
+            self._rules_mtime = mtime
+            logger.debug(f"Loaded {len(self._rules)} classification rules.")
+        except Exception as exc:
+            logger.error(f"Failed to load rules: {exc}")
+            self._rules = []
 
-    def classify(self, text: str, pages_count: int = 0) -> Tuple[str, float, List[str]]:
-        """
-        Analyzes text against loaded rules.
-        Returns (document_type, confidence_score, tags)
-        """
-        best_type = "sin_clasificar"
-        best_score = 0.0
-        best_tags = []
+    def _maybe_reload(self):
+        """Reload rules if the YAML file has been modified since last load."""
+        try:
+            mtime = os.path.getmtime(RULES_PATH)
+            if mtime > self._rules_mtime:
+                logger.info("rules.yaml changed — hot-reloading…")
+                self._load_rules()
+        except OSError:
+            pass
 
-        # Simplify checking locations by splitting text roughly
-        # This is a heuristic. For better precision, we'd use the page JSON data.
-        # For now, we assume 'text' is the full document text.
+    # ─── Classification ───────────────────────────────────────────────────────
+
+    def classify(self, text: str) -> Tuple[str, float, List[str]]:
+        """
+        Scores text against all rules.
+        Returns (document_type, confidence_score, tags).
+        """
+        self._maybe_reload()
+
         text_lower = text.lower()
-        
-        # Heuristic for "first pages" vs "last pages"
-        lines = text_lower.split('\n')
-        total_lines = len(lines)
-        header_region = "\n".join(lines[:min(50, total_lines)]) # First ~50 lines
-        footer_region = "\n".join(lines[max(0, total_lines-50):]) # Last ~50 lines
-        first_pages_region = "\n".join(lines[:min(300, total_lines)]) # Roughly first 3-5 pages depending on density
+        lines = text_lower.split("\n")
+        total = len(lines)
 
-        # Iterate rules
-        for rule in self.rules:
-            current_score = 0.0
-            matched_signals = 0
-            
-            for signal in rule.get('señales_fuertes', []):
-                pattern = signal['texto'].lower()
-                location = signal.get('ubicacion', 'cualquiera')
-                weight = signal.get('peso', 0.1)
-                
-                match_found = False
-                
-                if location == 'encabezado' or location == 'inicio':
-                    if pattern in header_region:
-                        match_found = True
-                elif location == 'ultimas_2_paginas' or location == 'cierre':
-                    if pattern in footer_region:
-                        match_found = True
-                elif location.startswith('primeras_'):
-                    if pattern in first_pages_region:
-                        match_found = True
+        header_region      = "\n".join(lines[: min(50, total)])
+        footer_region      = "\n".join(lines[max(0, total - 50):])
+        first_pages_region = "\n".join(lines[: min(300, total)])
+
+        best_type  = "sin_clasificar"
+        best_score = 0.0
+        best_tags: List[str] = []
+
+        for rule in self._rules:
+            score = 0.0
+            for signal in rule.get("señales_fuertes", []):
+                pattern  = signal["texto"].lower()
+                location = signal.get("ubicacion", "cualquiera")
+                weight   = signal.get("peso", 0.1)
+
+                found = False
+                if location in ("encabezado", "inicio"):
+                    found = pattern in header_region
+                elif location in ("ultimas_2_paginas", "cierre"):
+                    found = pattern in footer_region
+                elif location.startswith("primeras_"):
+                    found = pattern in first_pages_region
                 else:
-                    # 'cuerpo' or 'cualquiera'
-                    if pattern in text_lower:
-                        match_found = True
-                
-                if match_found:
-                    current_score += weight
-                    matched_signals += 1
-            
-            # Cap score at 1.0
-            current_score = min(current_score, 1.0)
-            
-            if current_score > best_score:
-                best_score = current_score
-                best_type = rule['tipo']
-                best_tags = rule.get('etiquetas', [])
+                    found = pattern in text_lower
 
-        # Check threshold
-        # We return the best guess, caller decides if it needs review based on score
-        
+                if found:
+                    score += weight
+
+            score = min(score, 1.0)
+
+            if score > best_score:
+                best_score = score
+                best_type  = rule["tipo"]
+                best_tags  = rule.get("etiquetas", [])
+
         return best_type, best_score, best_tags
 
-CLASSIFIER_INSTANCE = DocumentClassifier()
+    # ─── Threshold check ─────────────────────────────────────────────────────
+
+    def _requires_review(self, doc_type: str, confidence: float) -> bool:
+        if doc_type == "sin_clasificar":
+            return True
+        for rule in self._rules:
+            if rule["tipo"] == doc_type:
+                threshold = rule.get("umbral_confianza_alta", 0.7)
+                return confidence < threshold
+        return confidence < 0.7
+
+
+# ─── Module-level singleton ───────────────────────────────────────────────────
+_CLASSIFIER = DocumentClassifier()
+
 
 def classify_document(text: str) -> Dict[str, Any]:
-    doc_type, confidence, tags = CLASSIFIER_INSTANCE.classify(text)
-    
-    requires_review = True
-    found_rule = False
-    
-    for rule in CLASSIFIER_INSTANCE.rules:
-        if rule['tipo'] == doc_type:
-            found_rule = True
-            if confidence >= rule.get('umbral_confianza_alta', 0.7):
-                requires_review = False
-            break
-    
-    if not found_rule and doc_type != 'sin_clasificar':
-         # Fallback default threshold
-         if confidence >= 0.7:
-             requires_review = False
+    """
+    Full classification pipeline — also extracts entities.
+    Returns dict with: tipo, confianza, etiquetas, requiere_revision, entidades
+    """
+    doc_type, confidence, tags = _CLASSIFIER.classify(text)
+    requires_review = _CLASSIFIER._requires_review(doc_type, confidence)
 
-    if doc_type == 'sin_clasificar':
-        requires_review = True
-        
+    # Entity extraction (safe — never raises)
+    try:
+        entidades = ee.extract_entities(text)
+    except Exception as exc:
+        logger.warning(f"Entity extraction failed: {exc}")
+        entidades = {}
+
     return {
-        "tipo": doc_type,
-        "confianza": confidence,
-        "etiquetas": tags,
-        "requiere_revision": requires_review
+        "tipo":              doc_type,
+        "confianza":         confidence,
+        "etiquetas":         tags,
+        "requiere_revision": requires_review,
+        "entidades":         entidades,
     }

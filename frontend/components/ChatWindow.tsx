@@ -35,8 +35,9 @@ export function ChatWindow() {
         setIsLoading(true)
 
         try {
-            // We query all documents for now (doc_ids: null)
-            const response = await fetch('http://127.0.0.1:8000/query', {
+            // We query all documents (doc_ids: null)
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+            const response = await fetch(`${apiUrl}/query`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query: userMessage, doc_ids: null }),

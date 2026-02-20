@@ -11,9 +11,11 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'dashboard' | 'chat'>('dashboard')
 
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+
   const fetchDocuments = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/documents')
+      const res = await fetch(`${API_URL}/documents`)
       if (res.ok) {
         const data = await res.json()
         setDocuments(data)
@@ -26,10 +28,43 @@ export default function Home() {
   }
 
   useEffect(() => {
+    // Initial load
     fetchDocuments()
-    // Poll for updates every 5 seconds
-    const interval = setInterval(fetchDocuments, 5000)
-    return () => clearInterval(interval)
+
+    // Use SSE for real-time updates (replaces 5-second polling)
+    let eventSource: EventSource | null = null
+    let fallbackInterval: ReturnType<typeof setInterval> | null = null
+
+    const startFallbackPolling = () => {
+      if (!fallbackInterval) {
+        fallbackInterval = setInterval(fetchDocuments, 5000)
+      }
+    }
+
+    try {
+      eventSource = new EventSource(`${API_URL}/events`)
+      eventSource.onmessage = (ev) => {
+        try {
+          const payload = JSON.parse(ev.data)
+          if (Array.isArray(payload.documents)) {
+            setDocuments(payload.documents)
+            setIsLoading(false)
+          }
+        } catch (_) {}
+      }
+      eventSource.onerror = () => {
+        eventSource?.close()
+        eventSource = null
+        startFallbackPolling()
+      }
+    } catch (_) {
+      startFallbackPolling()
+    }
+
+    return () => {
+      eventSource?.close()
+      if (fallbackInterval) clearInterval(fallbackInterval)
+    }
   }, [])
 
   return (

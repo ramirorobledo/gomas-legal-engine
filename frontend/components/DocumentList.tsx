@@ -11,6 +11,12 @@ interface Document {
     type: string | null
     confidence: number | null
     processed_at: string | null
+    entities?: {
+        expedientes?: string[]
+        quejosos?: string[]
+        tribunales?: string[]
+        [key: string]: string[] | undefined
+    }
 }
 
 interface DocumentListProps {
@@ -80,11 +86,30 @@ export function DocumentList({ documents, isLoading }: DocumentListProps) {
                         <div>
                             <h4 className="font-medium text-slate-200">{doc.filename}</h4>
                             <div className="flex items-center space-x-2 text-xs text-slate-400 mt-1">
-                                <span className="capitalize">{doc.type?.replace('_', ' ') || 'Desconocido'}</span>
+                                <span className="capitalize">{doc.type?.replace(/_/g, ' ') || 'Desconocido'}</span>
                                 {doc.confidence !== null && (
                                     <span>• {(doc.confidence * 100).toFixed(0)}% confianza</span>
                                 )}
                             </div>
+                            {doc.entities && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                    {doc.entities.expedientes?.slice(0, 1).map((exp, i) => (
+                                        <span key={i} className="text-[9px] px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded border border-blue-800/40">
+                                            📋 {exp}
+                                        </span>
+                                    ))}
+                                    {doc.entities.quejosos?.slice(0, 1).map((q, i) => (
+                                        <span key={i} className="text-[9px] px-1.5 py-0.5 bg-purple-900/40 text-purple-300 rounded border border-purple-800/40">
+                                            👤 {q.length > 30 ? q.slice(0, 30) + '…' : q}
+                                        </span>
+                                    ))}
+                                    {doc.entities.tribunales?.slice(0, 1).map((t, i) => (
+                                        <span key={i} className="text-[9px] px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded border border-amber-800/40">
+                                            ⚖️ {t.length > 35 ? t.slice(0, 35) + '…' : t}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
 

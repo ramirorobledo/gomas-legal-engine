@@ -1,10 +1,18 @@
+# ─────────────────────────────────────────────────────────────────────────────
 # Reglas de clasificación para Gomas Legal Engine
-# Formato:
-# - tipo: nombre_del_tipo
-#   señales_fuertes: lista de patrones (texto o regex) con ubicación y peso
-#   umbral_confianza_alta: valor (0.0 - 1.0) para aceptar automático
-#   etiquetas: lista de etiquetas
+# ─────────────────────────────────────────────────────────────────────────────
+# Formato por regla:
+#   tipo:                  identificador snake_case
+#   señales_fuertes:       lista de patrones con ubicación y peso
+#     - texto:             cadena a buscar (case-insensitive)
+#       ubicacion:         encabezado | primeras_N_paginas | ultimas_2_paginas |
+#                          inicio | cuerpo | cualquiera
+#       peso:              0.0 – 1.0 (acumulados, cap en 1.0)
+#   umbral_confianza_alta: puntuación mínima para aceptar sin revisión manual
+#   etiquetas:             lista de tags libres
+# ─────────────────────────────────────────────────────────────────────────────
 
+# ── 1. AMPARO DIRECTO ─────────────────────────────────────────────────────────
 - tipo: amparo_directo
   señales_fuertes:
     - texto: "AMPARO DIRECTO"
@@ -16,9 +24,19 @@
     - texto: "QUEJOSO"
       ubicacion: primeras_5_paginas
       peso: 0.2
+    - texto: "ACTO RECLAMADO"
+      ubicacion: primeras_5_paginas
+      peso: 0.15
+    - texto: "AUTORIDAD RESPONSABLE"
+      ubicacion: primeras_5_paginas
+      peso: 0.15
+    - texto: "SENTENCIA RECLAMADA"
+      ubicacion: cuerpo
+      peso: 0.1
   umbral_confianza_alta: 0.7
-  etiquetas: [amparo, federal, sentencia]
+  etiquetas: [amparo, directo, federal, colegiado]
 
+# ── 2. AMPARO INDIRECTO ───────────────────────────────────────────────────────
 - tipo: amparo_indirecto
   señales_fuertes:
     - texto: "AMPARO INDIRECTO"
@@ -30,9 +48,19 @@
     - texto: "AUDIENCIA CONSTITUCIONAL"
       ubicacion: cuerpo
       peso: 0.3
+    - texto: "ACTO RECLAMADO"
+      ubicacion: primeras_5_paginas
+      peso: 0.15
+    - texto: "AUTORIDAD RESPONSABLE"
+      ubicacion: primeras_5_paginas
+      peso: 0.15
+    - texto: "SUSPENSIÓN"
+      ubicacion: cuerpo
+      peso: 0.1
   umbral_confianza_alta: 0.7
-  etiquetas: [amparo, federal, juzgado]
+  etiquetas: [amparo, indirecto, federal, distrito]
 
+# ── 3. SENTENCIA PENAL ────────────────────────────────────────────────────────
 - tipo: sentencia_penal
   señales_fuertes:
     - texto: "SENTENCIA DEFINITIVA"
@@ -44,9 +72,25 @@
     - texto: "CÓDIGO NACIONAL DE PROCEDIMIENTOS PENALES"
       ubicacion: cuerpo
       peso: 0.2
+    - texto: "IMPUTADO"
+      ubicacion: cuerpo
+      peso: 0.2
+    - texto: "MINISTERIO PÚBLICO"
+      ubicacion: cuerpo
+      peso: 0.15
+    - texto: "CULPABLE"
+      ubicacion: cuerpo
+      peso: 0.15
+    - texto: "PENA PRIVATIVA DE LIBERTAD"
+      ubicacion: cuerpo
+      peso: 0.2
+    - texto: "FISCALÍA"
+      ubicacion: cuerpo
+      peso: 0.1
   umbral_confianza_alta: 0.7
-  etiquetas: [penal, sentencia, estatal]
+  etiquetas: [penal, sentencia, estatal, imputado]
 
+# ── 4. ACUERDO DE TRÁMITE ─────────────────────────────────────────────────────
 - tipo: acuerdo_tramite
   señales_fuertes:
     - texto: "ACUERDO"
@@ -58,5 +102,146 @@
     - texto: "VISTO"
       ubicacion: inicio
       peso: 0.3
+    - texto: "CÚMPLASE"
+      ubicacion: ultimas_2_paginas
+      peso: 0.25
+    - texto: "TURNAR"
+      ubicacion: cuerpo
+      peso: 0.1
+    - texto: "EXPEDIENTE"
+      ubicacion: encabezado
+      peso: 0.1
   umbral_confianza_alta: 0.6
-  etiquetas: [tramite, acuerdo]
+  etiquetas: [tramite, acuerdo, administrativo]
+
+# ── 5. RECURSO DE REVISIÓN ────────────────────────────────────────────────────
+- tipo: recurso_revision
+  señales_fuertes:
+    - texto: "RECURSO DE REVISIÓN"
+      ubicacion: primeras_5_paginas
+      peso: 0.6
+    - texto: "REVISIÓN EN AMPARO"
+      ubicacion: primeras_5_paginas
+      peso: 0.5
+    - texto: "RECURRENTE"
+      ubicacion: primeras_5_paginas
+      peso: 0.25
+    - texto: "AGRAVIOS"
+      ubicacion: cuerpo
+      peso: 0.2
+    - texto: "RESOLUCIÓN IMPUGNADA"
+      ubicacion: cuerpo
+      peso: 0.2
+  umbral_confianza_alta: 0.7
+  etiquetas: [revision, amparo, recurso, federal]
+
+# ── 6. EJECUTORIA ─────────────────────────────────────────────────────────────
+- tipo: ejecutoria
+  señales_fuertes:
+    - texto: "EJECUTORIA"
+      ubicacion: encabezado
+      peso: 0.5
+    - texto: "CAUSA EJECUTORIADA"
+      ubicacion: cuerpo
+      peso: 0.4
+    - texto: "COSA JUZGADA"
+      ubicacion: cuerpo
+      peso: 0.35
+    - texto: "RESOLUCIÓN FIRME"
+      ubicacion: cuerpo
+      peso: 0.25
+    - texto: "SE DECLARA EJECUTORIADA"
+      ubicacion: cuerpo
+      peso: 0.5
+  umbral_confianza_alta: 0.65
+  etiquetas: [ejecutoria, firme, definitivo]
+
+# ── 7. AUTO ADMISORIO ─────────────────────────────────────────────────────────
+- tipo: auto_admisorio
+  señales_fuertes:
+    - texto: "SE ADMITE"
+      ubicacion: cuerpo
+      peso: 0.4
+    - texto: "ADMÍTASE"
+      ubicacion: cuerpo
+      peso: 0.5
+    - texto: "AUTO ADMISORIO"
+      ubicacion: encabezado
+      peso: 0.6
+    - texto: "PRESENTADA LA DEMANDA"
+      ubicacion: primeras_5_paginas
+      peso: 0.25
+    - texto: "REGÍSTRESE"
+      ubicacion: cuerpo
+      peso: 0.15
+  umbral_confianza_alta: 0.65
+  etiquetas: [auto, admision, tramite, inicial]
+
+# ── 8. INFORME JUSTIFICADO ────────────────────────────────────────────────────
+- tipo: informe_justificado
+  señales_fuertes:
+    - texto: "INFORME JUSTIFICADO"
+      ubicacion: encabezado
+      peso: 0.6
+    - texto: "AUTORIDAD RESPONSABLE RINDE"
+      ubicacion: primeras_5_paginas
+      peso: 0.5
+    - texto: "ACTO RECLAMADO ES CONSTITUCIONAL"
+      ubicacion: cuerpo
+      peso: 0.35
+    - texto: "INCONSTITUCIONALIDAD"
+      ubicacion: cuerpo
+      peso: 0.2
+  umbral_confianza_alta: 0.7
+  etiquetas: [informe, autoridad_responsable, amparo]
+
+# ── 9. LAUDO LABORAL ──────────────────────────────────────────────────────────
+- tipo: laudo_laboral
+  señales_fuertes:
+    - texto: "LAUDO"
+      ubicacion: encabezado
+      peso: 0.5
+    - texto: "JUNTA DE CONCILIACIÓN"
+      ubicacion: encabezado
+      peso: 0.4
+    - texto: "LEY FEDERAL DEL TRABAJO"
+      ubicacion: cuerpo
+      peso: 0.3
+    - texto: "ACTOR TRABAJADOR"
+      ubicacion: cuerpo
+      peso: 0.25
+    - texto: "REINSTALACIÓN"
+      ubicacion: cuerpo
+      peso: 0.2
+    - texto: "INDEMNIZACIÓN CONSTITUCIONAL"
+      ubicacion: cuerpo
+      peso: 0.2
+    - texto: "SALARIOS CAÍDOS"
+      ubicacion: cuerpo
+      peso: 0.2
+  umbral_confianza_alta: 0.65
+  etiquetas: [laboral, laudo, junta, trabajo]
+
+# ── 10. SENTENCIA CIVIL ───────────────────────────────────────────────────────
+- tipo: sentencia_civil
+  señales_fuertes:
+    - texto: "SENTENCIA"
+      ubicacion: encabezado
+      peso: 0.3
+    - texto: "CÓDIGO CIVIL"
+      ubicacion: cuerpo
+      peso: 0.3
+    - texto: "ACCIÓN EJERCITADA"
+      ubicacion: cuerpo
+      peso: 0.25
+    - texto: "PRESTACIONES RECLAMADAS"
+      ubicacion: cuerpo
+      peso: 0.2
+    - texto: "EXCEPCIÓN DE PRESCRIPCIÓN"
+      ubicacion: cuerpo
+      peso: 0.2
+    - texto: "CÓDIGO DE PROCEDIMIENTOS CIVILES"
+      ubicacion: cuerpo
+      peso: 0.25
+  umbral_confianza_alta: 0.65
+  etiquetas: [civil, sentencia, procedimiento]
