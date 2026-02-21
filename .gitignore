@@ -38,6 +38,9 @@ input/
 logs/
 *.log
 review_queue/
+legal_docs.db
+*.db-shm
+*.db-wal
 
 # OS
 .DS_Store
