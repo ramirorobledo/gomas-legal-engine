@@ -40,8 +40,92 @@ mcp = FastMCP("Gomas Legal Engine")
 
 
 @mcp.tool()
+def get_system_info() -> str:
+    """
+    Returns accurate technical information about the Gomas Legal Engine pipeline.
+
+    Call this tool FIRST whenever the user asks how the system works, what technology
+    it uses, how documents are stored, or how queries are processed.
+
+    IMPORTANT: This system does NOT use ChromaDB, Docling, Pinecone, embeddings,
+    or any vector database. It uses SQLite FTS5 + Mistral OCR + plain markdown files.
+    """
+    import os
+
+    docs = database.list_documents_db()
+    doc_count = len(docs)
+    indexed_count = sum(1 for d in docs if d.get("estado") == "indexado")
+
+    # Check indices dir
+    indices_dir = config.INDICES_DIR
+    index_files = []
+    if os.path.exists(indices_dir):
+        index_files = [f for f in os.listdir(indices_dir) if f.endswith(".json")]
+
+    return f"""=== GOMAS LEGAL ENGINE — Arquitectura del sistema ===
+
+PIPELINE DE PROCESAMIENTO (en orden):
+  1. PDF de entrada  →  carpeta input/ (vigilada por watchdog main.py)
+  2. OCR             →  Mistral API (modelo: mistral-ocr-latest)
+                        Convierte PDF a texto Markdown estructurado
+                        Preserva encabezados, tablas, formato
+  3. Normalización   →  normalizer.py
+                        - Detecta y elimina encabezados/pies de página recurrentes
+                          (líneas que aparecen en >40% de las páginas)
+                        - Elimina ruido OCR, números de página, URLs
+                        - Colapsa espacios en blanco excesivos
+  4. Clasificación   →  LLM (Claude/Mistral) clasifica tipo de documento
+                        (amparo_indirecto, código, ley, sentencia, etc.)
+  5. PageIndex       →  vectifyai/PageIndex
+                        Genera árbol jerárquico JSON de secciones/artículos
+                        Guardado en: {indices_dir}/index_{{id}}.json
+  6. SQLite FTS5     →  database.py
+                        Base de datos: {config.DB_PATH}
+                        Tabla: documentos (metadata + ruta OCR)
+                        FTS5: búsqueda full-text con ranking BM25
+                        El texto OCR completo se almacena en disco como .md
+
+CÓMO SE RESPONDEN LAS CONSULTAS (query_legal_docs):
+  1. FTS5 BM25 encuentra los documentos más relevantes para la query
+  2. Se lee el archivo .md del disco (texto OCR completo, SIN truncar)
+  3. Para docs pequeños (<180K chars): se envía el texto completo al LLM
+  4. Para docs grandes: extracción inteligente de secciones relevantes
+     - Si la query menciona artículos específicos ("art. 316") → texto exacto de esos artículos
+     - Si no → scoring por keywords en cada sección del documento
+  5. Claude genera respuesta basada ÚNICAMENTE en el texto extraído
+
+TECNOLOGÍAS (LO QUE SÍ USAMOS):
+  - OCR:       Mistral API (mistral-ocr-latest) → markdown
+  - Búsqueda:  SQLite FTS5 con BM25 ranking (sin vectores, sin embeddings)
+  - Índice:    PageIndex JSON (árbol jerárquico de secciones)
+  - LLM RAG:   Claude/Mistral para síntesis de respuestas
+  - API REST:  FastAPI + uvicorn (puerto 8000)
+  - Frontend:  Next.js (puerto 3000)
+
+TECNOLOGÍAS QUE NO USAMOS:
+  - ChromaDB ✗ | Pinecone ✗ | Weaviate ✗ | FAISS ✗ (sin vectores)
+  - Docling ✗ | LangChain ✗ | LlamaIndex ✗
+  - Embeddings ✗ | Similarity search ✗
+
+ESTADO ACTUAL:
+  - Documentos en base de datos: {doc_count}
+  - Documentos indexados: {indexed_count}
+  - Archivos PageIndex en disco: {len(index_files)}
+  - Directorio de índices: {indices_dir}
+  - Base de datos SQLite: {config.DB_PATH}
+"""
+
+
+@mcp.tool()
 def list_documents() -> str:
-    """Lists all available legal documents that have been indexed."""
+    """
+    Lists all available legal documents that have been indexed in this system.
+
+    Returns document ID, filename, document type (amparo_indirecto, código, ley, etc.),
+    classification confidence, and processing status.
+
+    Use this to discover available documents before querying them.
+    """
     docs = database.list_documents_db()
     if not docs:
         return "No documents found."
@@ -60,8 +144,17 @@ async def query_legal_docs(query: str, doc_ids: Optional[List[str]] = None) -> s
     """
     Answers a natural language query about the indexed legal documents.
 
+    HOW IT WORKS (do not invent other mechanisms):
+    1. SQLite FTS5 (BM25 ranking) finds the most relevant documents
+    2. The full OCR markdown text is read from disk (.md files, NOT from a vector DB)
+    3. For large documents, smart extraction finds the specific articles mentioned in the query
+    4. Claude generates an answer based ONLY on the extracted text
+
+    This system uses Mistral OCR + SQLite FTS5 + markdown files.
+    It does NOT use ChromaDB, Pinecone, embeddings, or any vector database.
+
     Args:
-        query: The question to ask (e.g. "¿Quién es el quejoso?").
+        query: The question to ask (e.g. "¿Quién es el quejoso?", "¿Qué dice el artículo 316?").
         doc_ids: Optional list of document IDs to restrict the search. If None, searches all.
     """
     try:
@@ -77,8 +170,11 @@ async def query_legal_docs(query: str, doc_ids: Optional[List[str]] = None) -> s
 @mcp.tool()
 def search_documents(query: str, limit: int = 10) -> str:
     """
-    Full-text BM25 search over all indexed documents.
+    Full-text BM25 search over all indexed documents using SQLite FTS5.
     Returns ranked results with document type, confidence, and summary.
+
+    Use this to find which documents are relevant to a topic before querying them.
+    This performs keyword matching with BM25 ranking — NOT semantic/vector search.
 
     Args:
         query: Search terms (e.g. "amparo quejoso García").
@@ -100,6 +196,7 @@ def search_documents(query: str, limit: int = 10) -> str:
 def get_document_entities(doc_id: str) -> str:
     """
     Returns the extracted entities (parties, dates, case numbers, laws) for a document.
+    Entities are extracted during the indexing pipeline and stored in SQLite.
 
     Args:
         doc_id: The numeric document ID.
@@ -126,12 +223,15 @@ def get_document_entities(doc_id: str) -> str:
 @mcp.tool()
 def get_article_text(doc_id: str, article_number: str) -> str:
     """
-    Returns the LITERAL text of a specific article directly from the OCR markdown.
-    No LLM synthesis — exact text as extracted from the document.
+    Returns the LITERAL text of a specific article directly from the OCR markdown file on disk.
+    No LLM synthesis, no interpretation — exact verbatim text as extracted by Mistral OCR.
+
+    Use this when you need the precise legal text of a specific article number.
+    Prefer this over query_legal_docs when the user asks for the exact text of a specific article.
 
     Args:
-        doc_id: The numeric document ID.
-        article_number: The article number to retrieve (e.g. "316", "1o", "490").
+        doc_id: The numeric document ID (use list_documents or search_documents to find it).
+        article_number: The article number to retrieve (e.g. "316", "1o", "490", "1").
     """
     import re, os
 
