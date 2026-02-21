@@ -15,12 +15,7 @@ except ImportError as e:
     logging.error(f"Failed to import PageIndex. Make sure it is cloned in lib/PageIndex. Error: {e}")
     sys.exit(1)
 
-import anthropic
-
-# Load Env
-load_dotenv()
-
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+import config  # loads .env and exposes ANTHROPIC_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +67,10 @@ async def generate_document_index(md_path: str, output_path: str):
         logger.error(f"Indexing failed: {e}", exc_info=True)
         raise e
 
-# Synchronous wrapper for main.py
-def create_index(md_path: str, doc_id: str, output_dir: str) -> str:
+# Async wrapper for main.py (called with await from async pipeline)
+async def create_index(md_path: str, doc_id: str, output_dir: str) -> str:
     xml_filename = f"index_{doc_id}.json"
     output_path = os.path.join(output_dir, xml_filename)
-    
-    asyncio.run(generate_document_index(md_path, output_path))
+
+    await generate_document_index(md_path, output_path)
     return output_path

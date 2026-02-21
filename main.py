@@ -147,7 +147,7 @@ async def _run_pipeline(filepath: str):
     # 8. Indexing
     logger.info(f"[{doc_id}] Indexing with PageIndex…")
     os.makedirs(config.INDICES_DIR, exist_ok=True)
-    index_path = indexer.create_index(norm_path, str(doc_id), config.INDICES_DIR)
+    index_path = await indexer.create_index(norm_path, str(doc_id), config.INDICES_DIR)
     database.update_indexed(doc_id)
     logger.success(f"[{doc_id}] Indexed → {index_path}")
 

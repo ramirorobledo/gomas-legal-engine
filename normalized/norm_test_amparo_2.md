@@ -1,7 +1,0 @@
-# OCR Result for test_amparo.pdf
-
-## Page 1
-
-AMPARO DIRECTO EN REVISIÓN
-TRIBUNAL COLEGIADO DE CIRCUITO
-QUEJOSO: Juan Pérez
