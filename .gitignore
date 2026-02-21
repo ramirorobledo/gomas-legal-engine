@@ -1,0 +1,6 @@
+dump_*.txt
+lineas_dump.txt
+summary_yesterday.txt
+__pycache__/
+.env
+*.pyc

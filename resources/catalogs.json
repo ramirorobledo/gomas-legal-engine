@@ -1,0 +1,74 @@
+{
+    "materias": {
+        "1": "Constitucional",
+        "2": "Penal",
+        "3": "Administrativa",
+        "4": "Civil",
+        "5": "Laboral",
+        "6": "Común",
+        "7": "Electoral"
+    },
+    "epocas": {
+        "5": {
+            "nombre": "Quinta Época",
+            "periodo": "1917-1957"
+        },
+        "6": {
+            "nombre": "Sexta Época",
+            "periodo": "1957-1968"
+        },
+        "7": {
+            "nombre": "Séptima Época",
+            "periodo": "1969-1988"
+        },
+        "8": {
+            "nombre": "Octava Época",
+            "periodo": "1988-1995"
+        },
+        "9": {
+            "nombre": "Novena Época",
+            "periodo": "1995-2011"
+        },
+        "10": {
+            "nombre": "Décima Época",
+            "periodo": "2011-2021"
+        },
+        "11": {
+            "nombre": "Undécima Época",
+            "periodo": "2021-presente"
+        }
+    },
+    "tipos_tesis": {
+        "TA": "Tesis Aislada — Criterio NO vinculante (orientador)",
+        "J": "Jurisprudencia — Criterio VINCULANTE (obligatorio)",
+        "PC": "Precedente — Sentencia que establece criterio"
+    },
+    "instancias": {
+        "pleno": "Pleno de la SCJN",
+        "primera_sala": "Primera Sala de la SCJN",
+        "segunda_sala": "Segunda Sala de la SCJN",
+        "plenos_regionales": "Plenos Regionales",
+        "tribunales_colegiados": "Tribunales Colegiados de Circuito",
+        "tribunales_unitarios": "Tribunales Unitarios de Circuito"
+    },
+    "tipos_asuntos_bj": {
+        "sentencia": "Sentencia — Resolución judicial definitiva",
+        "accion_inconstitucionalidad": "Acción de Inconstitucionalidad — Impugnación de normas",
+        "controversia_constitucional": "Controversia Constitucional — Conflicto entre poderes",
+        "contradiccion_tesis": "Contradicción de Tesis — Criterios opuestos entre tribunales",
+        "voto": "Voto particular o concurrente de un ministro"
+    },
+    "estados_tfja": {
+        "vigente": "La tesis está actualmente en vigor",
+        "suspendida": "La tesis está temporalmente sin efectos",
+        "modificada": "La tesis fue modificada por un criterio posterior",
+        "excepcion": "La tesis aplica solo en casos de excepción"
+    },
+    "urls": {
+        "sjf": "https://sjf2.scjn.gob.mx/busqueda-principal-tesis",
+        "bj": "https://bj.scjn.gob.mx/",
+        "tfja": "https://www.tfja.gob.mx/cesmdfa/sctj/sctj-busqueda/",
+        "julia": "https://julia.scjn.gob.mx",
+        "justicia": "https://justicia.scjn.gob.mx"
+    }
+}
