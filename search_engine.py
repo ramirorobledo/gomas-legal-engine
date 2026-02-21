@@ -90,17 +90,29 @@ class SearchEngine:
         return text
 
     def _build_context_for_doc(self, doc_id: str) -> str:
-        """Returns a text summary of the document's PageIndex tree."""
+        """Returns text context for a document.
+        Prefers full OCR text from disk; falls back to PageIndex tree summaries."""
+        # ── Try to read the full OCR text from the database ───────────────────
+        try:
+            row = database.get_document_by_id(int(doc_id))
+            if row:
+                ocr_path = row.get("ocr_path") or ""
+                if ocr_path and os.path.exists(ocr_path):
+                    with open(ocr_path, "r", encoding="utf-8") as f:
+                        ocr_text = f.read().strip()
+                    if ocr_text:
+                        return ocr_text
+        except Exception as exc:
+            logger.warning(f"Could not read OCR file for doc {doc_id}: {exc}")
+
+        # ── Fallback: PageIndex tree summaries ────────────────────────────────
         tree = self._indices.get(doc_id)
         if not tree:
             return ""
-
-        # PageIndex root can be a list (structure) or a dict
         if isinstance(tree, dict):
             structure = tree.get("structure", tree)
         else:
             structure = tree
-
         if isinstance(structure, list):
             return "\n".join(self._flatten_tree(node) for node in structure)
         return self._flatten_tree(structure)

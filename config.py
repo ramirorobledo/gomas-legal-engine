@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 # Load .env from repo root
 _env_path = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(_env_path)
+load_dotenv(_env_path, override=True)
 
 def _env(key: str, default: str = "") -> str:
     return os.getenv(key, default)

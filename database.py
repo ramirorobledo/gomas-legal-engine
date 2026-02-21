@@ -61,8 +61,23 @@ def init_db():
     _add_column_if_missing(cursor, "documentos", "entidades",  "TEXT")
     _add_column_if_missing(cursor, "documentos", "resumen",    "TEXT")
     _add_column_if_missing(cursor, "documentos", "norm_path",  "TEXT")
+    _add_column_if_missing(cursor, "documentos", "texto_ocr",  "TEXT")
 
     # ── FTS5 full-text search virtual table ───────────────────────────────────
+    # Check if texto_ocr is already in the FTS schema; if not, migrate.
+    fts_needs_migration = False
+    try:
+        cursor.execute("SELECT texto_ocr FROM documentos_fts LIMIT 1")
+    except sqlite3.OperationalError:
+        fts_needs_migration = True
+
+    if fts_needs_migration:
+        # Drop old triggers and FTS, then recreate with texto_ocr
+        cursor.execute("DROP TRIGGER IF EXISTS documentos_ai")
+        cursor.execute("DROP TRIGGER IF EXISTS documentos_ad")
+        cursor.execute("DROP TRIGGER IF EXISTS documentos_au")
+        cursor.execute("DROP TABLE IF EXISTS documentos_fts")
+
     # content= makes it a content table backed by `documentos`
     cursor.execute("""
     CREATE VIRTUAL TABLE IF NOT EXISTS documentos_fts USING fts5(
@@ -71,6 +86,7 @@ def init_db():
         etiquetas,
         resumen,
         entidades,
+        texto_ocr,
         content='documentos',
         content_rowid='id',
         tokenize='unicode61 remove_diacritics 1'
@@ -81,35 +97,37 @@ def init_db():
     cursor.execute("""
     CREATE TRIGGER IF NOT EXISTS documentos_ai AFTER INSERT ON documentos BEGIN
         INSERT INTO documentos_fts(rowid, nombre_archivo, tipo_documento,
-            etiquetas, resumen, entidades)
+            etiquetas, resumen, entidades, texto_ocr)
         VALUES (new.id, new.nombre_archivo, COALESCE(new.tipo_documento,''),
             COALESCE(new.etiquetas,''), COALESCE(new.resumen,''),
-            COALESCE(new.entidades,''));
+            COALESCE(new.entidades,''), COALESCE(new.texto_ocr,''));
     END
     """)
 
     cursor.execute("""
     CREATE TRIGGER IF NOT EXISTS documentos_ad AFTER DELETE ON documentos BEGIN
         INSERT INTO documentos_fts(documentos_fts, rowid, nombre_archivo,
-            tipo_documento, etiquetas, resumen, entidades)
+            tipo_documento, etiquetas, resumen, entidades, texto_ocr)
         VALUES ('delete', old.id, old.nombre_archivo,
             COALESCE(old.tipo_documento,''), COALESCE(old.etiquetas,''),
-            COALESCE(old.resumen,''), COALESCE(old.entidades,''));
+            COALESCE(old.resumen,''), COALESCE(old.entidades,''),
+            COALESCE(old.texto_ocr,''));
     END
     """)
 
     cursor.execute("""
     CREATE TRIGGER IF NOT EXISTS documentos_au AFTER UPDATE ON documentos BEGIN
         INSERT INTO documentos_fts(documentos_fts, rowid, nombre_archivo,
-            tipo_documento, etiquetas, resumen, entidades)
+            tipo_documento, etiquetas, resumen, entidades, texto_ocr)
         VALUES ('delete', old.id, old.nombre_archivo,
             COALESCE(old.tipo_documento,''), COALESCE(old.etiquetas,''),
-            COALESCE(old.resumen,''), COALESCE(old.entidades,''));
+            COALESCE(old.resumen,''), COALESCE(old.entidades,''),
+            COALESCE(old.texto_ocr,''));
         INSERT INTO documentos_fts(rowid, nombre_archivo, tipo_documento,
-            etiquetas, resumen, entidades)
+            etiquetas, resumen, entidades, texto_ocr)
         VALUES (new.id, new.nombre_archivo, COALESCE(new.tipo_documento,''),
             COALESCE(new.etiquetas,''), COALESCE(new.resumen,''),
-            COALESCE(new.entidades,''));
+            COALESCE(new.entidades,''), COALESCE(new.texto_ocr,''));
     END
     """)
 
@@ -207,14 +225,45 @@ def update_document_classification(
     conn.close()
 
 
-def update_ocr_data(doc_id: int, ocr_path: str, ocr_json_path: str, pages: int):
+def update_ocr_data(doc_id: int, ocr_path: str, ocr_json_path: str, pages: int,
+                    texto_ocr: Optional[str] = None):
     conn = get_db_connection()
     conn.execute(
-        "UPDATE documentos SET ocr_path=?, ocr_json_path=?, paginas=?, estado='ocr_ok' WHERE id=?",
-        (ocr_path, ocr_json_path, pages, doc_id),
+        "UPDATE documentos SET ocr_path=?, ocr_json_path=?, paginas=?, "
+        "texto_ocr=?, estado='ocr_ok' WHERE id=?",
+        (ocr_path, ocr_json_path, pages, texto_ocr or "", doc_id),
     )
     conn.commit()
     conn.close()
+
+
+def populate_ocr_text_from_files():
+    """Backfills texto_ocr for existing documents that have ocr_path but no texto_ocr."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT id, ocr_path FROM documentos "
+        "WHERE ocr_path IS NOT NULL AND (texto_ocr IS NULL OR texto_ocr='')"
+    ).fetchall()
+    # Convert to plain dicts so connection can be closed before iteration
+    rows = [dict(r) for r in rows]
+    conn.close()
+    updated = 0
+    for row in rows:
+        ocr_path = row["ocr_path"]
+        if ocr_path and os.path.exists(ocr_path):
+            try:
+                with open(ocr_path, "r", encoding="utf-8") as f:
+                    text = f.read().strip()
+                if text:
+                    conn2 = get_db_connection()
+                    conn2.execute("UPDATE documentos SET texto_ocr=? WHERE id=?",
+                                  (text, row["id"]))
+                    conn2.commit()
+                    conn2.close()
+                    updated += 1
+            except Exception:
+                pass
+    return updated
 
 
 def update_norm_path(doc_id: int, norm_path: str):
