@@ -266,10 +266,13 @@ def get_article_text(doc_id: str, article_number: str) -> str:
             text = ocr_text[start:end].strip()
             return f"[TEXTO LITERAL — {row['nombre_archivo']}]\n\n{text}"
 
+    m_first = re.search(r'(\d+)', positions[0][1])
+    m_last  = re.search(r'(\d+)', positions[-1][1])
+    first_num = m_first.group(1) if m_first else '?'
+    last_num  = m_last.group(1)  if m_last  else '?'
     return (f"Artículo {article_number} no encontrado en documento {doc_id} "
             f"({row['nombre_archivo']}). El documento tiene {len(positions)} artículos "
-            f"(del {re.search(r'(\\d+)', positions[0][1]).group(1)} "
-            f"al {re.search(r'(\\d+)', positions[-1][1]).group(1)}).")
+            f"(del {first_num} al {last_num}).")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
