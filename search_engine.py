@@ -89,10 +89,69 @@ class SearchEngine:
 
         return text
 
-    def _build_context_for_doc(self, doc_id: str) -> str:
+    # ─── Relevant section extraction for large documents ──────────────────────
+
+    def _extract_relevant_sections(self, ocr_text: str, query: str,
+                                   context_lines: int = 40) -> str:
+        """
+        For large documents: split by page/article, find sections that match
+        query keywords, return those sections with surrounding context.
+        """
+        import re
+
+        # Normalize query into keywords (words 3+ chars)
+        keywords = [w.lower() for w in re.split(r'\W+', query) if len(w) >= 3]
+
+        # Split into sections by ## Page N or # Artículo headings
+        section_pattern = re.compile(
+            r'(?=^#{1,2}\s+(?:Page\s+\d+|Art[ií]culo\s+\d+[\w\.]*\b))',
+            re.MULTILINE | re.IGNORECASE
+        )
+        sections = section_pattern.split(ocr_text)
+        if len(sections) <= 1:
+            # Fallback: split by lines, use sliding windows
+            lines = ocr_text.splitlines()
+            sections = [
+                "\n".join(lines[i:i + context_lines])
+                for i in range(0, len(lines), context_lines // 2)
+            ]
+
+        # Score each section by keyword matches
+        scored = []
+        for sec in sections:
+            sec_lower = sec.lower()
+            score = sum(sec_lower.count(kw) for kw in keywords)
+            if score > 0:
+                scored.append((score, sec))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        if not scored:
+            # No keyword match — return first MAX_CONTEXT_CHARS chars
+            return ocr_text[:180_000]
+
+        # Take top sections up to MAX_CONTEXT_CHARS
+        result_parts = []
+        total = 0
+        for _, sec in scored:
+            if total + len(sec) > 180_000:
+                break
+            result_parts.append(sec)
+            total += len(sec)
+
+        logger.info(f"Extracted {len(result_parts)}/{len(sections)} sections "
+                    f"({total} chars) for query: {query!r}")
+        return "\n\n---\n\n".join(result_parts)
+
+    def _build_context_for_doc(self, doc_id: str, query: str = "") -> str:
         """Returns text context for a document.
-        Prefers full OCR text from disk; falls back to PageIndex tree summaries."""
-        # ── Try to read the full OCR text from the database ───────────────────
+        - Small docs (< 180K chars): returns full OCR text.
+        - Large docs: extracts only the sections relevant to the query.
+        Falls back to PageIndex tree summaries if no OCR file."""
+
+        MAX_FULL = 180_000  # chars — send full text below this threshold
+
+        # ── Try to read the full OCR text ─────────────────────────────────────
         try:
             row = database.get_document_by_id(int(doc_id))
             if row:
@@ -101,7 +160,12 @@ class SearchEngine:
                     with open(ocr_path, "r", encoding="utf-8") as f:
                         ocr_text = f.read().strip()
                     if ocr_text:
-                        return ocr_text
+                        if len(ocr_text) <= MAX_FULL:
+                            return ocr_text          # small doc: full text
+                        elif query:
+                            return self._extract_relevant_sections(ocr_text, query)
+                        else:
+                            return ocr_text[:MAX_FULL]
         except Exception as exc:
             logger.warning(f"Could not read OCR file for doc {doc_id}: {exc}")
 
@@ -153,7 +217,7 @@ class SearchEngine:
             if did not in self._indices:
                 logger.warning(f"Doc ID {did!r} not in index cache.")
                 continue
-            ctx = self._build_context_for_doc(did)
+            ctx = self._build_context_for_doc(did, query=query)
             if ctx:
                 context_parts.append(f"=== Documento {did} ===\n{ctx}")
                 used_ids.append(did)
