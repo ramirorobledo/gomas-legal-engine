@@ -123,6 +123,55 @@ def get_document_entities(doc_id: str) -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+def get_article_text(doc_id: str, article_number: str) -> str:
+    """
+    Returns the LITERAL text of a specific article directly from the OCR markdown.
+    No LLM synthesis — exact text as extracted from the document.
+
+    Args:
+        doc_id: The numeric document ID.
+        article_number: The article number to retrieve (e.g. "316", "1o", "490").
+    """
+    import re, os
+
+    try:
+        row = database.get_document_by_id(int(doc_id))
+    except (ValueError, TypeError):
+        return f"Invalid doc_id: {doc_id}"
+    if not row:
+        return f"Document {doc_id} not found."
+
+    ocr_path = row.get("ocr_path") or ""
+    if not ocr_path or not os.path.exists(ocr_path):
+        return f"No OCR file found for document {doc_id}."
+
+    with open(ocr_path, "r", encoding="utf-8") as f:
+        ocr_text = f.read()
+
+    # Find the article using the same splitter as search_engine
+    pattern = re.compile(
+        r'^(#{1,2}\s+Art[ií]culo\s+[\d\w°o\.]+[^\n]*)',
+        re.MULTILINE | re.IGNORECASE
+    )
+    positions = [(m.start(), m.group(1)) for m in pattern.finditer(ocr_text)]
+    if not positions:
+        return f"No articles found in document {doc_id}."
+
+    num_clean = re.sub(r'[°o\.\s]', '', article_number).lower()
+    for i, (start, heading) in enumerate(positions):
+        h_num = re.search(r'(\d+)', heading)
+        if h_num and re.sub(r'[°o\.\s]', '', h_num.group(1)).lower() == num_clean:
+            end = positions[i + 1][0] if i + 1 < len(positions) else len(ocr_text)
+            text = ocr_text[start:end].strip()
+            return f"[TEXTO LITERAL — {row['nombre_archivo']}]\n\n{text}"
+
+    return (f"Artículo {article_number} no encontrado en documento {doc_id} "
+            f"({row['nombre_archivo']}). El documento tiene {len(positions)} artículos "
+            f"(del {re.search(r'(\\d+)', positions[0][1]).group(1)} "
+            f"al {re.search(r'(\\d+)', positions[-1][1]).group(1)}).")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MODE 2 — HTTP REST MCP (port 8765)
 # ══════════════════════════════════════════════════════════════════════════════
