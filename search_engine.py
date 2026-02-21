@@ -91,55 +91,94 @@ class SearchEngine:
 
     # ─── Relevant section extraction for large documents ──────────────────────
 
-    def _extract_relevant_sections(self, ocr_text: str, query: str,
-                                   context_lines: int = 40) -> str:
+    def _split_into_articles(self, ocr_text: str):
+        """Split OCR text into article-level sections. Returns list of (heading, text) tuples."""
+        import re
+        pattern = re.compile(
+            r'^(#{1,2}\s+Art[ií]culo\s+[\d\w°o\.]+[^\n]*)',
+            re.MULTILINE | re.IGNORECASE
+        )
+        positions = [(m.start(), m.group(1)) for m in pattern.finditer(ocr_text)]
+        if not positions:
+            return []
+        sections = []
+        for i, (start, heading) in enumerate(positions):
+            end = positions[i + 1][0] if i + 1 < len(positions) else len(ocr_text)
+            sections.append((heading, ocr_text[start:end]))
+        return sections
+
+    def _extract_relevant_sections(self, ocr_text: str, query: str) -> str:
         """
-        For large documents: split by page/article, find sections that match
-        query keywords, return those sections with surrounding context.
+        Smart extraction for large documents:
+        1. If query mentions specific article numbers → find those exact articles.
+        2. Otherwise → keyword scoring across article sections.
+        Never returns more than MAX_CHARS to the LLM.
         """
         import re
 
-        # Normalize query into keywords (words 3+ chars)
+        MAX_CHARS = 180_000
+
+        # ── 1. Detect specific article numbers in the query ───────────────────
+        # Match "artículo 316", "art. 316", or bare numbers like "316"
+        explicit = re.findall(
+            r'art[ií]culo[s°o\.]?\s*(\d+[\w°o\.]*)',
+            query, re.IGNORECASE
+        )
+        if not explicit:
+            explicit = re.findall(r'\b(\d{2,4})\b', query)
+
+        if explicit:
+            articles = self._split_into_articles(ocr_text)
+            found = []
+            for num in explicit:
+                num_clean = re.sub(r'[°o\.]', '', num).lower()
+                for heading, text in articles:
+                    h_num = re.search(r'(\d+)', heading)
+                    if h_num and h_num.group(1) == num_clean:
+                        found.append(text)
+                        break
+            if found:
+                result = "\n\n---\n\n".join(found)
+                logger.info(f"Exact article match for {explicit}: {len(result)} chars")
+                return result[:MAX_CHARS]
+
+        # ── 2. Keyword scoring across article sections ────────────────────────
         keywords = [w.lower() for w in re.split(r'\W+', query) if len(w) >= 3]
 
-        # Split into sections by ## Page N or # Artículo headings
+        # Split by article OR page headings
         section_pattern = re.compile(
-            r'(?=^#{1,2}\s+(?:Page\s+\d+|Art[ií]culo\s+\d+[\w\.]*\b))',
+            r'(?=^#{1,2}\s+(?:Page\s+\d+|Art[ií]culo\s+\d+))',
             re.MULTILINE | re.IGNORECASE
         )
         sections = section_pattern.split(ocr_text)
         if len(sections) <= 1:
-            # Fallback: split by lines, use sliding windows
+            # No headings found: chunk by lines
             lines = ocr_text.splitlines()
             sections = [
-                "\n".join(lines[i:i + context_lines])
-                for i in range(0, len(lines), context_lines // 2)
+                "\n".join(lines[i:i + 60])
+                for i in range(0, len(lines), 30)
             ]
 
-        # Score each section by keyword matches
         scored = []
         for sec in sections:
             sec_lower = sec.lower()
             score = sum(sec_lower.count(kw) for kw in keywords)
             if score > 0:
                 scored.append((score, sec))
-
         scored.sort(key=lambda x: x[0], reverse=True)
 
         if not scored:
-            # No keyword match — return first MAX_CONTEXT_CHARS chars
-            return ocr_text[:180_000]
+            logger.warning(f"No keyword match for query {query!r}; returning first {MAX_CHARS} chars")
+            return ocr_text[:MAX_CHARS]
 
-        # Take top sections up to MAX_CONTEXT_CHARS
-        result_parts = []
-        total = 0
+        result_parts, total = [], 0
         for _, sec in scored:
-            if total + len(sec) > 180_000:
+            if total + len(sec) > MAX_CHARS:
                 break
             result_parts.append(sec)
             total += len(sec)
 
-        logger.info(f"Extracted {len(result_parts)}/{len(sections)} sections "
+        logger.info(f"Keyword extraction: {len(result_parts)}/{len(sections)} sections "
                     f"({total} chars) for query: {query!r}")
         return "\n\n---\n\n".join(result_parts)
 
